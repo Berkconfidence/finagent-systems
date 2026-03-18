@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.terraform/
+terraform.tfstate*
+qdrant_storage/
+gcp-key.json
+.env
+fin_agent/tests/__init__.py
+Dockerfile
+.dockerignore

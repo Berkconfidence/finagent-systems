@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package credit;
+
+// Kredi Analiz Servisi
+service CreditScoring {
+  rpc GetCreditAnalysis (AnalysisRequest) returns (AnalysisResponse);
+}
+
+message AnalysisRequest {
+  string company_name = 1;
+  string tax_id = 2;
+}
+
+message AnalysisResponse {
+  float risk_score = 1;      // 0.0 - 1.0 arası
+  string recommendation = 2; // "ONAY", "RED", "EK_INCELEME"
+  string summary_report = 3; 
+}
