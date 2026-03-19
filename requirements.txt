@@ -27,3 +27,7 @@ openinference-instrumentation-langchain==0.1.61
 
 # Infrastructure
 python-dotenv==1.2.2
+
+tavily-python==0.7.23
+langchain-google-vertexai
+langchain-google-genai

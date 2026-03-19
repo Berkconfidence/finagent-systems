@@ -1,29 +1,30 @@
-from typing import Annotated, List, TypedDict, Dict, Any
-import operator
+from typing import Annotated, List, Dict, Any, Literal, TypedDict
 from langchain_core.messages import BaseMessage
+import operator
 
 class AgentState(TypedDict):
-    # Ana rapor konusu/şirket adı
     company_name: str
     
-    # Mesaj geçmişi (Persistence/Memory için kritik)
-    # Annotated + operator.add sayesinde ajan mesajları birbirini silmez, eklenir.
+    instructions: Annotated[List[BaseMessage], operator.add]
+
     messages: Annotated[List[BaseMessage], operator.add]
     
-    # Paralel çalışan işçilerden (Workers) gelecek sonuçlar
-    # Orchestrator-Worker desenindeki 'completed_sections' mantığı
-    analysis_results: Annotated[List[Dict[str, Any]], operator.add]
+    # Finansal Veriler
+    financial_kpis: Annotated[List[Dict[str, Any]], operator.add]
     
-    # Nihai risk raporu ve onay durumu
+    # Piyasa Analizi
+    market_sentiment: Annotated[List[Dict[str, Any]], operator.add]
+    
+    # Reflection: Auditor'ın düzeltme talepleri buraya yazılır
+    audit_log: Annotated[List[str], operator.add]
+
+    # Analiz sürecinin hangi aşamada olduğunu (step) takip eden bir sayaç (Max loops engellemek için)
+    loop_step: Annotated[int, operator.add]
+    
+    # Karar ve Raporlama
     final_report: str
-    is_approved: bool  # Risk Auditor onayı
-
-
-# fin_agent/utils/state.py
-from typing import Annotated, TypedDict
-import operator
-
-class SimpleState(TypedDict):
-    # 'operator.add' sayesinde mesajlar silinmez, liste olarak birikir.
-    messages: Annotated[list, operator.add]
-    user_name: str
+    
+    # Kredi kararı için tipler
+    credit_decision: Literal["PENDING", "APPROVED", "REJECTED", "REVISION_REQUIRED"]
+    
+    next_node: str
