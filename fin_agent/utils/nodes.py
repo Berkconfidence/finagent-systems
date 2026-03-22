@@ -1,12 +1,12 @@
 import os
 import json
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_vertexai import ChatVertexAI
 from fin_agent.utils.state import AgentState
 from fin_agent.utils.tools import pdf_to_images, search_market_data
 
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+llm = ChatVertexAI(model="gemini-2.5-flash", temperature=0.2)
 
 def orchestrator(state: AgentState):
     """
@@ -16,9 +16,24 @@ def orchestrator(state: AgentState):
     
     company = state.get("company_name", "Bilinmeyen Şirket")
     
+    # Geçmiş döngülerden gelen bir revizyon (fırça/geri bildirim) var mı kontrol et
+    audit_logs = state.get("audit_log", [])
+    latest_audit = audit_logs[-1] if audit_logs else None
+    
+    context_str = f"CONTEXT: {company} firması için kurumsal kredi risk analizi süreci başlatılıyor."
+    if latest_audit:
+        context_str += f"""
+        
+        DİKKAT - DENETÇİDEN (AUDITOR) REVİZYON TALEBİ GELDİ:
+        Bu bir tekrar değerlendirme döngüsüdür. Önceki analizlerde denetçi şu sorunu tespit etti:
+        '{latest_audit}'
+        
+        GÖREVİN: Lütfen ajanlar için hazırlayacağın yeni analiz planını, DOĞRUDAN denetçinin bu eleştirilerini giderecek odak noktalarıyla kurgula. Sistemin en fazla 3 deneme hakkı vardır, analiz ajanlarını tam verimle çözüm üretmeye zorla!
+        """
+    
     system_prompt = f"""
     ROLE: Kurumsal bir finans kuruluşunun Kredi Komitesi Başkanı ve Kıdemli AI Mimarı.
-    CONTEXT: {company} firması için kurumsal kredi risk analizi süreci başlatılıyor.
+    {context_str}
     
     GOAL: 
     1. Analiz kapsamını belirle (Finansal KPI'lar ve Piyasa verileri).
@@ -32,7 +47,7 @@ def orchestrator(state: AgentState):
     OUTPUT REQUIREMENTS:
     Yanıtını mutlaka aşağıdaki JSON formatında vermelisin. Başka açıklama yapma.
     {{
-        "plan": "Detaylı analiz stratejisi...",
+        "plan": "Ajanlara verilecek detaylı stratejik talimat metni. (Lütfen sadece düz metin (string) yazın, iç içe JSON objeleri kullanmayın.)",
         "reasoning": "Neden bu ajanlar seçildi? Hangi risklere odaklanılacak?",
         "next_node": "financial_agent" 
     }}
@@ -40,14 +55,17 @@ def orchestrator(state: AgentState):
 
     user_prompt = f"Analiz edilecek hedef şirket: {company}. Lütfen görev dağılımını ve stratejik planı hazırla."
 
-    structured_llm = llm.with_structured_output(method="json_mode")
-    response_dict = structured_llm.invoke(system_prompt + "\n" + user_prompt)
+    # ChatVertexAI with_structured_output'u dictionary veya BaseModel şeması gerektirir.
+    # JSON Mode yerine manuel JSON parse garantisiyle text istiyoruz
+    response = llm.invoke(system_prompt + "\n" + user_prompt)
 
     try:
-        decision = response_dict if isinstance(response_dict, dict) else json.loads(response_dict)
+        # Kod çalışırken backtickleri (```json ... ```) temizlemek çok önemlidir.
+        cleaned_text = response.content.replace("```json", "").replace("```", "").strip()
+        decision = json.loads(cleaned_text)
     except Exception as e:
         decision = {
-            "plan": "Hata: JSON parse edilemedi. Manuel planlama devreye alınıyor.",
+            "plan": f"Hata: JSON parse edilemedi ({str(e)}). Manuel planlama devreye alınıyor.",
             "next_node": "financial_agent"
         }
 
@@ -68,7 +86,9 @@ def financialAgent(state: AgentState):
     images = pdf_to_images(pdf_path)
 
     company_name = state.get("company_name", "Bilinmeyen Şirket")
-    orchestrator_instruction = state.get("instructions", "Talimat yok")
+    
+    inst_list = state.get("instructions", [])
+    orchestrator_instruction = inst_list[-1].content if inst_list else "Talimat yok."
     
     prompt = f"""
     Sen kıdemli bir kurumsal kredi analistisin (Senior Credit Underwriter).
@@ -80,7 +100,7 @@ def financialAgent(state: AgentState):
     ----------------------------
     
     Yukarıdaki stratejik odağı dikkate alarak verileri incele ve KESİNLİKLE aşağıdaki şemaya uygun, sadece saf JSON formatında çıktı ver. Başka hiçbir açıklama metni ekleme.
-    Eğer bir veriyi ya da oranı tablolardan hesaplayamıyor veya bulamıyorsan, değer olarak `null` ata. Uydurma veri üretme.
+    Eğer oranlar (örneğin current_ratio, debt_to_equity vb.) tablolarda doğrudan yazmıyorsa, lütfen bilançodaki ve gelir tablosundaki alt kalemleri (Dönen Varlıklar, Kısa Vadeli Yabancı Kaynaklar, Borçlar, Özkaynak vb.) bularak kendin HESAPLA. Gerekli tüm matematiksel işlemleri yap. Sadece hesaplama için gereken alt kalemler de yoksa veya şirket verileri net değilse `null` ata. Uydurma veri üretme.
     
     Beklenen JSON yapısı:
     {{
@@ -122,11 +142,11 @@ def financialAgent(state: AgentState):
     
     message = HumanMessage(content=content_parts)
     
-    structured_llm = llm.with_structured_output(method="json_mode")
+    response = llm.invoke([message])
     
     try:
-        response_dict = structured_llm.invoke([message])
-        raw_analysis = response_dict if isinstance(response_dict, dict) else json.loads(response_dict)
+        cleaned_text = response.content.replace("```json", "").replace("```", "").strip()
+        raw_analysis = json.loads(cleaned_text)
     except Exception as e:
         raw_analysis = {"error": f"JSON Parse veya çağırma hatası: {str(e)}"}
 
@@ -139,7 +159,9 @@ def marketAgent(state: AgentState):
     """Market verilerini analiz eden ajan"""
 
     company_name = state.get("company_name", "Bilinmeyen Şirket")
-    orchestrator_instruction = state.get("instructions", "Talimat yok")
+    
+    inst_list = state.get("instructions", [])
+    orchestrator_instruction = inst_list[-1].content if inst_list else "Talimat yok."
 
     prompt = f"""
     Sen kıdemli bir Piyasa Riski Analistisin (Senior Market Risk Analyst / Piyasanın Sesi).
@@ -185,14 +207,23 @@ def marketAgent(state: AgentState):
                 )
                 messages_to_send.append(tool_msg)
         
-        structured_llm = llm.with_structured_output(method="json_mode")
-        final_response_dict = structured_llm.invoke(messages_to_send)
+        final_response = llm.invoke(messages_to_send)
+        try:
+            cleaned_text = final_response.content.replace("```json", "").replace("```", "").strip()
+            final_response_dict = json.loads(cleaned_text)
+        except Exception:
+            final_response_dict = {"error": "JSON parse edilemedi"}
     else:
         try:
-            final_response_dict = json.loads(ai_msg.content)
+            cleaned_text = ai_msg.content.replace("```json", "").replace("```", "").strip()
+            final_response_dict = json.loads(cleaned_text)
         except Exception:
-            structured_llm = llm.with_structured_output(method="json_mode")
-            final_response_dict = structured_llm.invoke(messages_to_send)
+            final_response = llm.invoke(messages_to_send)
+            try:
+                cleaned_text = final_response.content.replace("```json", "").replace("```", "").strip()
+                final_response_dict = json.loads(cleaned_text)
+            except Exception:
+                final_response_dict = {"error": "JSON parse edilemedi"}
 
     try:
         raw_analysis = final_response_dict if isinstance(final_response_dict, dict) else json.loads(final_response_dict)
@@ -203,3 +234,113 @@ def marketAgent(state: AgentState):
         "market_sentiment": [raw_analysis],
         "messages": [AIMessage(content="Piyasa, haber akışı ve sektörel risk analizi tamamlandı.")]
     }
+
+def riskAuditorAgent(state: AgentState):
+    """
+    Finansal ve piyasa verilerini banka kredi politikasıyla karşılaştırıp 
+    nihai kararı veren veya revizyon isteyen denetçi ajan.
+    """
+    
+    company_name = state.get("company_name", "Bilinmeyen Şirket")
+    financial_data = state.get("financial_kpis", [])[-1] if state.get("financial_kpis") else {}
+    market_data = state.get("market_sentiment", [])[-1] if state.get("market_sentiment") else {}
+    loop_state = state.get("loop_step", 0)
+    audit_logs = state.get("audit_log", [])
+
+    history_str = ""
+    if audit_logs:
+        logs_joined = "\n".join([f"- Döngü {i+1}: {log}" for i, log in enumerate(audit_logs)])
+        history_str = f"""
+    GEÇMİŞ REVİZYON TALEPLERİN (AUDIT LOG GEÇMİŞİ):
+    {logs_joined}
+
+    DİKKAT - DÖNGÜ ENGELLEME KURALI:
+    Yukarıdaki geçmiş taleplerine bak. Eğer daha önceki bir döngüde "X verisi eksik", "Y hesaplanamamış" diyerek eksik verilerden dolayı revizyon (REVISION_REQUIRED) istediysen ve sana gelen yeni 'financial_data' içinde bu alanlar HALA eksik/null ise, demek ki analiz edilen dökümanlarda bu veriler KESİNLİKLE YOKTUR. Ajanlar aynı PDF'i inceliyor, olmayan veriyi var edemezler.
+    Bu durumda, AYNI EKSİK BİLGİ İÇİN TEKRARDAN "REVISION_REQUIRED" KULLANAMAZSIN! Eksik verilerin varlığını kabul et ve doğrudan elindeki mevcut verilere (örneğin mevcut current_ratio'ya vb.) veya sektör risklerine bakarak "APPROVED" ya da "REJECTED" kararı ver. Paranı/token'ı boşa harcama!
+    """
+
+    credit_policy = """
+    1. Cari Oran (Current Ratio) > 1.2 olmalıdır. Aksi halde likidite riski vardır.
+    2. Borç / Özsermaye (Debt to Equity) < 4.0 olmalıdır. Aşarsa yüksek kaldıraç riski yaratır.
+    3. Faiz Karşılama Oranı (Interest Coverage Ratio) > 1.5 olmalıdır. Borç ödeme kapasitesi için kritiktir.
+    4. Sektör Risk Puanı > 70 veya Haber Akışında Belirgin Bir 'NEGATIVE' sentiment varsa, şirketin faaliyet riski yüksektir; 'REVISION_REQUIRED' denilerek daha detaylı inceleme talep edilmelidir.
+    5. Güçlü Operasyonel Nakit Akışı veya FAVÖK Marjı, makroekonomik riskleri bir nebze hafifletebilir ancak tamamen silmez.
+    """
+
+    system_prompt = f"""
+    Sen kurumun Kıdemli Kredi Risk Denetçisisin (Senior Risk Auditor).
+    Görevin: Finansal ajan ve piyasa ajanından gelen ham KPI verilerini Banka Kredi Politikası ile çapraz doğrulamak ve son kredi kararını (veya ek analiz talebini) vermektir.
+    
+    MEVCUT DURUM:
+    Şu anda analiz döngüsünün {loop_state}. adımındasın. Maximum döngü limiti 3'tür. 
+    EĞER BU ADIM >= 3 İSE, 'REVISION_REQUIRED' seçeneğini KESİNLİKLE KULLANAMAZSIN. Ya 'APPROVED' ya da 'REJECTED' kararı vermek ZORUNDASIN.
+    
+    KURALLAR:
+    {credit_policy}
+
+    SENİN BİLGİ KAYNAKLARIN:
+    {history_str}
+
+    ANALİZ EDİLECEK VERİLER:
+    - Şirket Adı: {company_name}
+    - Finans Ajanından Gelen Veriler (KPIs): {json.dumps(financial_data, ensure_ascii=False)}
+    - Piyasa Ajanından Gelen Veriler (Market & Sentiment): {json.dumps(market_data, ensure_ascii=False)}
+
+    KARAR STRATEJİSİ VE ÇIKTI FORMATI:
+    1. Verileri harmanla: Kar çok iyi ama piyasada çok büyük riskler varsa ve (loop_step < 3) ise "REVISION_REQUIRED" kararı ver ve analizde spesifik neyin eksik/çelişkili olduğunu "audit_note" içinde açıkla.
+    2. Eğer metrikler politikaya açıkça ters düşüyor ve kabul edilemez riskler barındırıyorsa "REJECTED".
+    3. Eğer şirket genel hatlarıyla sağlıklıysa ve riskler tolere edilebilirse "APPROVED".
+    4. "next_node" değeri kararına bağlıdır. Karar "REVISION_REQUIRED" ise 'orchestrator' olmalıdır (çünkü ajanları yeniden paralel başlatacağız). Karar "APPROVED" veya "REJECTED" ise 'END' olmalıdır.
+    5. YANITINI KESİNLİKLE AŞAĞIDAKİ JSON ŞEMASIYLA VER:
+    
+    {{
+        "decision": "APPROVED" | "REJECTED" | "REVISION_REQUIRED",
+        "audit_note": "Ajanlara yönelik eleştiri veya onay gerekçesi...",
+        "summary_report": "Kredi komitesine sunulacak derinlemesine yönetici özeti...",
+        "next_node": "orchestrator" | "END"
+    }}
+    """
+
+    response = llm.invoke(system_prompt)
+    
+    try:
+        cleaned_text = response.content.replace("```json", "").replace("```", "").strip()
+        raw_analysis = json.loads(cleaned_text)
+    except Exception as e:
+        raw_analysis = {
+            "decision": "REJECTED",
+            "audit_note": f"Sistem hatası veya JSON parse edilemedi: {str(e)}",
+            "summary_report": "Otomatik red kararı - Analiz tamamlanamadı.",
+            "next_node": "END"
+        }
+
+    # Eğer model kurala uymayıp loop>=3 iken hala revision dönerse (Hallucination önlemi)
+    decision = raw_analysis.get("decision", "REJECTED")
+    if loop_state >= 3 and decision == "REVISION_REQUIRED":
+        decision = "REJECTED"
+        raw_analysis["decision"] = decision
+        raw_analysis["audit_note"] = "Maximum analiz limitine ulaşıldı, zorunlu olarak karar mekanizması işletildi ve güvenlik nedeniyle Reddedildi."
+        raw_analysis["next_node"] = "END"
+
+    return {
+        "credit_decision": decision,
+        "audit_log": [raw_analysis.get("audit_note", "No note")],
+        "final_report": raw_analysis.get("summary_report", ""),
+        "instructions": [AIMessage(content=f"DENETÇİ NOTU: {raw_analysis.get('audit_note')}")],
+        "next_node": raw_analysis.get("next_node", "END"),
+        "loop_step": 1,
+        "messages": [AIMessage(content=f"Auditor kararı: {decision}")]
+    }
+
+def routeReport(state: AgentState):
+    """
+    Nihai karara veya revizyon isteğine göre yönlendiren koşullu fonksiyon.
+    Bu bir node (düğüm) değil, bir Edge (kenar) koşuludur (Conditional Edge).
+    Graph'a "Hangi yola gideyim?" sorusunun cevabını string (düğüm adı) olarak döner.
+    """
+    next_node = state.get("next_node", "END")
+    
+    if next_node not in ["orchestrator", "END"]:
+        return "END"
+        
+    return next_node

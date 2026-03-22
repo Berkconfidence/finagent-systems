@@ -1,10 +1,8 @@
 import fitz
 import base64
-from typing import List, Dict, Any
-from google.cloud import aiplatform
-from vertexai.generative_models import GenerativeModel, Part, Image
-import json
+from typing import List
 import os
+from langchain_core.tools import tool
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
@@ -12,7 +10,6 @@ load_dotenv()
 tavily_api_key = os.getenv("TAVILY_SEARCH_API")
 client = TavilyClient(api_key=tavily_api_key)
 
-model = GenerativeModel("gemini-2.5-flash")
 
 def pdf_to_images(pdf_path: str) -> List[str]:
     """PDF dosyasını her sayfası bir base64 görsel olacak şekilde listeye çevirir."""
@@ -25,8 +22,6 @@ def pdf_to_images(pdf_path: str) -> List[str]:
         images_base64.append(base64.b64encode(img_bytes).decode("utf-8"))
     
     return images_base64
-
-from langchain_core.tools import tool
 
 @tool
 def search_market_data(company_name: str) -> str:
@@ -52,5 +47,3 @@ def search_market_data(company_name: str) -> str:
         return search_context
     except Exception as e:
         return f"İnternet araması sırasında hata oluştu veya veri bulunamadı: {str(e)}"
-
-    
