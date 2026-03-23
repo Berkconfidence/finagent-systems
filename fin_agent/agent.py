@@ -1,7 +1,8 @@
-from IPython.display import Image, display
 from langgraph.graph import StateGraph, START, END
 from fin_agent.utils.state import AgentState
 from fin_agent.utils.nodes import orchestrator, financialAgent, marketAgent, riskAuditorAgent, routeReport
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 
 # 1. Grafı State yapısıyla başlat
 workflow = StateGraph(AgentState)
@@ -26,7 +27,8 @@ workflow.add_conditional_edges(
     }
 )
 
-# 4. Derle
-app = workflow.compile()
+checkpointer = InMemorySaver()
+store = InMemoryStore()
 
-#display(Image(app.get_graph().draw_mermaid_png()))
+# 4. Derle
+app = workflow.compile(checkpointer=checkpointer, store=store)

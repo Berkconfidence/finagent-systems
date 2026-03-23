@@ -1,4 +1,3 @@
-import fitz
 import base64
 from typing import List
 import os
@@ -11,17 +10,11 @@ tavily_api_key = os.getenv("TAVILY_SEARCH_API")
 client = TavilyClient(api_key=tavily_api_key)
 
 
-def pdf_to_images(pdf_path: str) -> List[str]:
-    """PDF dosyasını her sayfası bir base64 görsel olacak şekilde listeye çevirir."""
-    doc = fitz.open(pdf_path)
-    images_base64 = []
-    
-    for page in doc:
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-        img_bytes = pix.tobytes("png")
-        images_base64.append(base64.b64encode(img_bytes).decode("utf-8"))
-    
-    return images_base64
+def get_pdf_base64(pdf_path: str) -> str:
+    """PDF dosyasını okuyup tek bir base64 string'e çevirir."""
+    with open(pdf_path, "rb") as f:
+        pdf_data = f.read()
+    return base64.b64encode(pdf_data).decode("utf-8")
 
 @tool
 def search_market_data(company_name: str) -> str:
