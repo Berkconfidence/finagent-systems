@@ -9,6 +9,21 @@ services:
     networks:
       - finagent_network
 
+  db:
+    image: postgres:16-alpine
+    container_name: finagent_db
+    restart: always
+    environment:
+      - POSTGRES_USER=berk_admin
+      - POSTGRES_PASSWORD=ing_hubs_pass
+      - POSTGRES_DB=langgraph_persistence
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - finagent_network
+
   fastapi-app:
     build: .
     container_name: finagent_api
@@ -19,14 +34,19 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
       - PROJECT_ID=PROJECT_ID_BURAYA
+      - DATABASE_URL=postgresql://berk_admin:ing_hubs_pass@db:5432/langgraph_persistence
     volumes:
       - .:/app
       - ./gcp-key.json:/app/gcp-key.json:ro
     depends_on:
       - qdrant
+      - db
     networks:
       - finagent_network
 
 networks:
   finagent_network:
     driver: bridge
+
+volumes:
+  postgres_data:

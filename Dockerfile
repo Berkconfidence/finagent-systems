@@ -4,10 +4,11 @@ FROM python:3.12-slim
 # Çalışma dizini
 WORKDIR /app
 
-# Sistem bağımlılıklarını kur (gRPC ve PDF işlemleri için gerekebilir)
+# Sistem bağımlılıklarını kur
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Bağımlılıkları kopyala ve kur
@@ -17,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Tüm proje kodunu kopyala
 COPY . .
 
-# gRPC dosyalarını üret (Proto'dan Python koduna)
+# gRPC dosyalarını üret
 RUN mkdir -p ./src/services && \
     python -m grpc_tools.protoc -I./proto \
     --python_out=./src/services \

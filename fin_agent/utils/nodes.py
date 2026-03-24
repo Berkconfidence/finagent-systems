@@ -1,41 +1,13 @@
 import os
 import json
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.rate_limiters import InMemoryRateLimiter
-from google.oauth2 import service_account
+from langchain_google_vertexai import ChatVertexAI
 from fin_agent.utils.state import AgentState
 from fin_agent.utils.tools import get_pdf_base64, search_market_data
-from langgraph.store.base import BaseStore
+from langgraph.store.base import BaseStore # Bunu import edin
 
 
-# Vertex AI service account credentials
-_root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_credentials = service_account.Credentials.from_service_account_file(
-    os.path.join(_root_dir, "gcp-key.json"),
-    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-)
-
-rate_limiter = InMemoryRateLimiter(
-    requests_per_second=0.15,     # ~9 RPM — free/low-tier için güvenli limit
-    check_every_n_seconds=0.5,
-    max_bucket_size=2,
-)
-
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0.2,
-    max_retries=5,
-    rate_limiter=rate_limiter,
-    vertexai=True,
-    project=os.getenv("GOOGLE_CLOUD_PROJECT", "fin-agent-360"),
-    location="us-central1",
-    credentials=_credentials,
-)
-
-def _sanitize_ns(name: str) -> str:
-    """LangGraph store namespace'lerinde nokta ve özel karakter kullanılamaz."""
-    return name.replace(".", "").replace("/", "-").strip()
+llm = ChatVertexAI(model="gemini-2.5-flash", temperature=0.2)
 
 def orchestrator(state: AgentState, store: BaseStore):
     """
@@ -44,9 +16,10 @@ def orchestrator(state: AgentState, store: BaseStore):
     """
     
     company = state.get("company_name", "Bilinmeyen Şirket")
+    safe_company_name = company.replace(".", "").strip()
     loop_step = state.get("loop_step", 0)
     
-    past_memory = store.get(namespace=("companies", _sanitize_ns(company)), key="last_credit_decision")
+    past_memory = store.get(namespace=("companies", safe_company_name), key="last_credit_decision")
     
     if past_memory and loop_step == 0:
         decision = past_memory.value.get("decision")
@@ -294,6 +267,7 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
     """
     
     company_name = state.get("company_name", "Bilinmeyen Şirket")
+    safe_company_name = company_name.replace(".", "").strip()
     financial_data = state.get("financial_kpis", [])[-1] if state.get("financial_kpis") else {}
     market_data = state.get("market_sentiment", [])[-1] if state.get("market_sentiment") else {}
     loop_state = state.get("loop_step", 0)
@@ -303,7 +277,7 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
     orchestrator_instruction = inst_list[-1].content if inst_list else ""
     
     if "[SKIP_ANALYSIS]" in orchestrator_instruction:
-        past_memory = store.get(namespace=("companies", _sanitize_ns(company_name)), key="last_credit_decision")
+        past_memory = store.get(namespace=("companies", safe_company_name), key="last_credit_decision")
         decision = past_memory.value.get("decision") if past_memory else "UNKNOWN"
         reason = past_memory.value.get("reason") if past_memory else "UNKNOWN"
         return {
@@ -394,9 +368,9 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
 
 
     store.put(
-        namespace=("companies", _sanitize_ns(company_name)),
+        namespace=("companies", safe_company_name),
         key="last_credit_decision",
-        value={"decision": decision, "reason": "Borçluluk çok yüksek"}
+        value={"decision": decision, "reason": raw_analysis.get("audit_note", "Belirtilmedi")}
     )
 
     return {

@@ -33,6 +33,6 @@ langchain-google-vertexai
 langchain-google-genai
 
 # Database & State Checkpointing
-psycopg[binary,pool]
-langgraph-checkpoint-postgres
+psycopg[binary,pool]==3.3.3
+langgraph-checkpoint-postgres==3.0.5
 

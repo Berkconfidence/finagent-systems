@@ -1,8 +1,10 @@
+import os
 from langgraph.graph import StateGraph, START, END
 from fin_agent.utils.state import AgentState
 from fin_agent.utils.nodes import orchestrator, financialAgent, marketAgent, riskAuditorAgent, routeReport
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.store.memory import InMemoryStore
+from psycopg_pool import ConnectionPool
+from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.store.postgres import PostgresStore
 
 # 1. Grafı State yapısıyla başlat
 workflow = StateGraph(AgentState)
@@ -27,8 +29,18 @@ workflow.add_conditional_edges(
     }
 )
 
-checkpointer = InMemorySaver()
-store = InMemoryStore()
+# 4. PostgreSQL bağlantısı
+DB_URI = os.environ.get(
+    "DATABASE_URL",
+)
 
-# 4. Derle
+pool = ConnectionPool(conninfo=DB_URI)
+checkpointer = PostgresSaver(pool)
+store = PostgresStore(pool)
+
+# İlk çalışmada gerekli tabloları oluştur
+checkpointer.setup()
+store.setup()
+
+# 5. Derle
 app = workflow.compile(checkpointer=checkpointer, store=store)

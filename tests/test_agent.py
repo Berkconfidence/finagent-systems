@@ -4,7 +4,7 @@ load_dotenv()
 from fin_agent.agent import app
 
 def main():
-    threads = ["test_kredi_analizi_001", "test_kredi_analizi_002"] # İki farklı oturum
+    threads = ["test_kredi_analizi_001", "test_kredi_analizi_002"]
 
     for idx, thread_id in enumerate(threads):
         print(f"\n=======================================================")
