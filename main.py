@@ -1,17 +1,42 @@
 from fastapi import FastAPI
-# LangGraph objenizi farklı bir isimle içe aktarın (örneğin agent_app)
-from fin_agent.agent import app as agent_app 
+from contextlib import asynccontextmanager
+import logging
+from app.api.router import api_router
+from fin_agent.agent import pool
 
-# Uvicorn'un çalıştıracağı asıl FastAPI uygulaması
-app = FastAPI(title="FinAgent Systems API")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI uygulamasının yaşam döngüsü.
+    Başlarken: Veritabanı bağlantıları zaten fin_agent/agent.py'de oluşturuldu.
+    Kapanırken: Connection pool'u (bağlantı havuzunu) güvenlice kapatır.
+    """
+    logger.info("FinAgent-360 başlatılıyor... Veritabanı pool'u aktif.")
+    yield
+    logger.info("FinAgent-360 kapatılıyor... Postgres pool'u temizleniyor.")
+    pool.close()
+
+app = FastAPI(
+    title="FinAgent-360 API",
+    description="Multi-Agent & Multi-Modal Corporate Credit Risk Analysis System",                                                                                  
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/")
 async def root():
-    return {"message": "FinAgent API çalışıyor."}
-
-@app.get("/invoke")
-async def invoke_agent(query: str):
-    # LangGraph ajanını burada çalıştırın
-    # Mevcut state yapınıza göre input formatı (dict vb.) değişebilir
-    result = agent_app.invoke({"input": query}) 
-    return {"response": result}
+    return {
+        "message": "FinAgent-360 API sistemine hoş geldiniz.",
+        "docs_url": "/docs",
+        "status": "Running"
+    }

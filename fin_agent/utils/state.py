@@ -1,4 +1,4 @@
-from typing import Annotated, List, Dict, Any, Literal, TypedDict
+from typing import Annotated, List, Dict, Any, Literal, Optional, TypedDict
 from langchain_core.messages import BaseMessage
 import operator
 
@@ -28,3 +28,6 @@ class AgentState(TypedDict):
     credit_decision: Literal["PENDING", "APPROVED", "REJECTED", "REVISION_REQUIRED"]
     
     next_node: str
+
+    # HITL: İnsan onayı
+    human_approval: Optional[bool]

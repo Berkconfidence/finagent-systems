@@ -4,7 +4,8 @@ from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, Tool
 from langchain_google_vertexai import ChatVertexAI
 from fin_agent.utils.state import AgentState
 from fin_agent.utils.tools import get_pdf_base64, search_market_data
-from langgraph.store.base import BaseStore # Bunu import edin
+from langgraph.store.base import BaseStore
+from langgraph.types import interrupt
 
 
 llm = ChatVertexAI(model="gemini-2.5-flash", temperature=0.2)
@@ -310,7 +311,7 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
     system_prompt = f"""Sen kurumun Kıdemli Kredi Risk Denetçisisin (Senior Risk Auditor).
     MEVCUT DURUM:
     Şu anda analiz döngüsünün {loop_state}. adımındasın. Maximum döngü limiti 1'dir. 
-    EĞER BU ADIM >= 2 İSE, 'REVISION_REQUIRED' seçeneğini KESİNLİKLE KULLANAMAZSIN. Ya 'APPROVED' ya da 'REJECTED' kararı vermek ZORUNDASIN.
+    EĞER BU ADIM >= 1 İSE, 'REVISION_REQUIRED' seçeneğini KESİNLİKLE KULLANAMAZSIN. Ya 'APPROVED' ya da 'REJECTED' kararı vermek ZORUNDASIN.
 
     KURALLAR:
     {credit_policy}
@@ -358,14 +359,28 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
             "next_node": "END"
         }
 
-    # Eğer model kurala uymayıp loop>=3 iken hala revision dönerse (Hallucination önlemi)
+    # Eğer model kurala uymayıp loop>=1 iken hala revision dönerse (Hallucination önlemi)
     decision = raw_analysis.get("decision", "REJECTED")
-    if loop_state >= 2 and decision == "REVISION_REQUIRED":
+    if loop_state >= 1 and decision == "REVISION_REQUIRED":
         decision = "REJECTED"
         raw_analysis["decision"] = decision
         raw_analysis["audit_note"] = "Maximum analiz limitine ulaşıldı, zorunlu olarak karar mekanizması işletildi ve güvenlik nedeniyle Reddedildi."
         raw_analysis["next_node"] = "END"
 
+    # HUMAN-IN-THE-LOOP
+    human_decision = interrupt({
+        "question": "Denetçi kararını onaylıyor musunuz?",
+        "auditor_decision": decision,
+        "audit_note": raw_analysis.get("audit_note", ""),
+        "summary_report": raw_analysis.get("summary_report", "")
+    })
+
+    if not human_decision:
+        decision = "REJECTED"
+        raw_analysis["decision"] = "REJECTED"
+        raw_analysis["audit_note"] = "İnsan denetçi tarafından reddedildi."
+        raw_analysis["summary_report"] = "Kredi talebi insan denetçi tarafından reddedilmiştir."
+        raw_analysis["next_node"] = "END"
 
     store.put(
         namespace=("companies", safe_company_name),
@@ -380,7 +395,8 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
         "instructions": [AIMessage(content=f"DENETÇİ NOTU: {raw_analysis.get('audit_note')}")],
         "next_node": raw_analysis.get("next_node", "END"),
         "loop_step": 1,
-        "messages": [AIMessage(content=f"Auditor kararı: {decision}")]
+        "messages": [AIMessage(content=f"Auditor kararı: {decision}")],
+        "human_approval": human_decision
     }
 
 def routeReport(state: AgentState):
