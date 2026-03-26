@@ -1,0 +1,12 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "finagent_workflow": "./fin_agent/agent.py:app"
+  },
+  "env": ".env",
+  "store": {
+    "index": {
+      "embed": false
+    }
+  }
+}

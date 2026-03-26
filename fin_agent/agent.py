@@ -34,7 +34,10 @@ DB_URI = os.environ.get(
     "DATABASE_URL",
 )
 
-pool = ConnectionPool(conninfo=DB_URI)
+pool = ConnectionPool(
+    conninfo=DB_URI,
+    kwargs={"autocommit": True} # Bu ayar concurrent index hatasını (ActiveSqlTransaction) çözer
+)
 checkpointer = PostgresSaver(pool)
 store = PostgresStore(pool)
 
