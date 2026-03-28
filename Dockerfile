@@ -19,11 +19,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # gRPC dosyalarını üret
-RUN mkdir -p ./src/services && \
-    python -m grpc_tools.protoc -I./proto \
-    --python_out=./src/services \
-    --grpc_python_out=./src/services \
-    ./proto/credit_score.proto
+RUN python -m grpc_tools.protoc -I./fin_proto \
+    --python_out=./fin_proto \
+    --grpc_python_out=./fin_proto \
+    ./fin_proto/credit_score.proto
     
 # Portları aç
 EXPOSE 8000 50051

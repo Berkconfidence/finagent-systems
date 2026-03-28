@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package finagent;
+
+// Kurumsal Kredi Risk Analiz Servisi
+service CreditRiskService {
+  rpc StartAnalysis (AnalysisRequest) returns (AnalysisResponse);
+  rpc GetAnalysisStatus (ThreadRequest) returns (AnalysisResponse);
+}
+
+// Ana Sistemden bize gelecek olan istek formatı
+message AnalysisRequest {
+  string company_name = 1;
+}
+
+// Önceden başlatılmış işlemi sorgularken kullanılacak ID
+message ThreadRequest {
+  string thread_id = 1;
+}
+
+// LangGraph'tan kuruma döneceğimiz cevap formatı
+message AnalysisResponse {
+  string thread_id = 1;
+  string company_name = 2;
+  string credit_decision = 3;  
+  string final_report = 4;
+  string financial_kpis_json = 5;
+  string market_sentiment_json = 6;
+  string audit_log_json = 7;
+  bool waiting_for_human = 8;
+}

@@ -24,6 +24,10 @@ google-cloud-aiplatform==1.141.0
 # Observability & Monitoring
 arize-phoenix==13.15.0
 openinference-instrumentation-langchain==0.1.61
+loguru==0.7.3
+
+# Development & Debugging
+langgraph-cli[inmem]>=0.4.19
 
 # Infrastructure
 python-dotenv==1.2.2

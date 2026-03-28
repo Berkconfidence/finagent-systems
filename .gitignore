@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .git/
 .terraform/
+.langgraph_api/
 terraform.tfstate*
 qdrant_storage/
 gcp-key.json
