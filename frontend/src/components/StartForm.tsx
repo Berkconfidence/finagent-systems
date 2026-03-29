@@ -10,11 +10,13 @@ const StartForm: React.FC<StartFormProps> = ({ onStarted }) => {
   const [companyName, setCompanyName] = useState('TÜRK HAVA YOLLARI A.O.');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setInfo(null);
     
     try {
       const response = await startAnalysis({
@@ -22,6 +24,7 @@ const StartForm: React.FC<StartFormProps> = ({ onStarted }) => {
       });
       
       if (response && response.thread_id) {
+        setInfo(response.message || null);
         onStarted(response.thread_id);
       } else {
         setError('Geçersiz yanıt: Thread ID bulunamadı.');
@@ -55,6 +58,12 @@ const StartForm: React.FC<StartFormProps> = ({ onStarted }) => {
         {error && (
           <div className="text-red-600 text-sm bg-red-50 p-2 rounded">
             {error}
+          </div>
+        )}
+
+        {info && (
+          <div className="text-blue-700 text-sm bg-blue-50 p-2 rounded border border-blue-100">
+            {info}
           </div>
         )}
 

@@ -13,6 +13,11 @@ export interface StartAnalysisRequest {
   company_name: string;
 }
 
+export interface StartAnalysisResponse {
+  thread_id: string;
+  message: string;
+}
+
 export interface HitlRequest {
   is_approved: boolean;
   note?: string;
@@ -26,7 +31,7 @@ export interface AnalysisSseEvent<T = any> {
 }
 
 export const startAnalysis = async (data: StartAnalysisRequest) => {
-  const response = await api.post('/api/v1/analysis/start', data);
+  const response = await api.post<StartAnalysisResponse>('/api/v1/analysis/start', data);
   return response.data;
 };
 

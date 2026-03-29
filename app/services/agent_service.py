@@ -1,10 +1,61 @@
 from langgraph.types import Command
 import logging
-from fin_agent.agent import app as agent_app
+from fin_agent.agent import app as agent_app, pool
 from app.schemas.analysis import AnalysisRequest, ApprovalRequest
 from app.schemas.status import ThreadStatusResponse, AgentStateSchema
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_company_name(value: str) -> str:
+    return (value or "").replace(".", "").strip().upper()
+
+
+def find_active_thread_for_company(company_name: str, limit: int = 200) -> ThreadStatusResponse | None:
+    """
+    Checkpoint tablosundan şirket için en güncel thread'leri tarar,
+    halen running/interrupted olan ilk thread'i döner.
+    """
+    target = _normalize_company_name(company_name)
+    if not target:
+        return None
+
+    try:
+        query = """
+        WITH latest AS (
+            SELECT DISTINCT ON (thread_id)
+                thread_id,
+                checkpoint_id,
+                checkpoint
+            FROM checkpoints
+            ORDER BY thread_id, checkpoint_id DESC
+        )
+        SELECT
+            thread_id,
+            checkpoint_id,
+            COALESCE(checkpoint->'channel_values'->>'company_name', '') AS company_name
+        FROM latest
+        ORDER BY checkpoint_id DESC
+        LIMIT %s
+        """
+
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (limit,))
+                rows = cur.fetchall()
+
+        for thread_id, _checkpoint_id, row_company_name in rows:
+            if _normalize_company_name(row_company_name) != target:
+                continue
+
+            thread_status = get_thread_status(thread_id)
+            if thread_status.status in ["running", "interrupted"]:
+                return thread_status
+
+    except Exception as e:
+        logger.error(f"Aktif thread aranırken hata company={company_name}: {e}")
+
+    return None
 
 def start_analysis_task(thread_id: str, request_data: AnalysisRequest):
     """

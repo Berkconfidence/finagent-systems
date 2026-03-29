@@ -24,6 +24,19 @@ async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundT
     İşlem uzun sürebileceği için süreç arka planda yürütülür.
     Hemen bir thread_id dönülür, böylece istemci (UI) süreci polling ile takip edebilir.
     """
+    existing_thread = agent_service.find_active_thread_for_company(request.company_name)
+    if existing_thread:
+        logger.info(
+            f"Mevcut aktif thread tekrar kullanılıyor company={request.company_name}, thread_id={existing_thread.thread_id}"
+        )
+        return AnalysisResponse(
+            thread_id=existing_thread.thread_id,
+            message=(
+                f"'{request.company_name}' için devam eden bir analiz bulundu. "
+                "Mevcut thread üzerinden devam ediliyor."
+            ),
+        )
+
     thread_id = str(uuid.uuid4())
     
     background_tasks.add_task(agent_service.start_analysis_task, thread_id, request)
