@@ -1,6 +1,7 @@
 import asyncio
 import grpc
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 from app.api.router import api_router
@@ -45,6 +46,15 @@ app = FastAPI(
     description="Multi-Agent & Multi-Modal Corporate Credit Risk Analysis System",                                                                                  
     version="1.0.0",
     lifespan=lifespan
+)
+
+# CORS ayarları
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(api_router, prefix="/api/v1")

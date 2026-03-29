@@ -32,11 +32,6 @@ class CreditRiskGRPCServer(credit_score_pb2_grpc.CreditRiskServiceServicer):
                 def __init__(self, name):
                     self.company_name = name
             
-            # `start_analysis_task` senkron (def) bir fonksiyondur, 
-            # asenkron (async def) degildir. Bu yuzden await veya create_task 
-            # degeri dondurmek yerine standart bir thread veya loop icinde vermeliyiz.
-            # Ancak gRPC yapısında bankayı bekletmemek için fonksiyonu kendi
-            # ayrı thread'imizde arka planda başlatalım. (Fastapinin BackgroundTask'i gibi)
             import threading
             threading.Thread(target=start_analysis_task, args=(thread_id, DummyRequest(company_name))).start()
 
@@ -77,14 +72,10 @@ class CreditRiskGRPCServer(credit_score_pb2_grpc.CreditRiskServiceServicer):
                 context.set_details("Böyle bir thread bulunamadı.")
                 return credit_score_pb2.AnalysisResponse()
 
-            # get_thread_status bir Pydantic modeli döndüğü için .get() ile değil 
-            # nokta notasyonu ile erişmemiz gerekiyor.
             status = getattr(state_data, "status", "PENDING")
             state_obj = getattr(state_data, "state", None)
             
-            # gRPC veri string bekler.
             def to_json_str(data):
-                # Pydantic içindeki liste sözlüklerini güvenli çevirmek için
                 try:
                     return json.dumps(data, ensure_ascii=False) if data else "[]"
                 except:

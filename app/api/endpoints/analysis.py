@@ -1,4 +1,7 @@
+import asyncio
+import json
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import StreamingResponse
 import uuid
 import logging
 
@@ -9,6 +12,10 @@ from app.services import agent_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _format_sse(event_name: str, data: dict) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 @router.post("/start", response_model=AnalysisResponse, status_code=202)
 async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundTasks):
@@ -38,6 +45,58 @@ async def get_analysis_status(thread_id: str):
         logger.error(f"Status okunurken hata thread_id={thread_id}: {e}")
         raise HTTPException(status_code=500, detail="Durum sorgulanırken sunucu hatası oluştu.")
 
+
+@router.get("/{thread_id}/events")
+async def stream_analysis_events(thread_id: str):
+    """
+    Thread durumunu SSE (Server-Sent Events) ile canlı olarak yayınlar.
+    İstemci tarafında EventSource ile dinlenebilir.
+    """
+
+    async def event_generator():
+        last_fingerprint = None
+        heartbeat_tick = 0
+
+        while True:
+            try:
+                status = agent_service.get_thread_status(thread_id)
+                payload = status.model_dump()
+                fingerprint = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+                if fingerprint != last_fingerprint:
+                    event_name = "snapshot" if last_fingerprint is None else "status_update"
+                    last_fingerprint = fingerprint
+                    heartbeat_tick = 0
+                    yield _format_sse(event_name, payload)
+                else:
+                    heartbeat_tick += 1
+                    if heartbeat_tick >= 5:
+                        heartbeat_tick = 0
+                        yield _format_sse("heartbeat", {"thread_id": thread_id})
+
+                if payload.get("status") in ["completed", "failed"]:
+                    yield _format_sse("end", payload)
+                    break
+
+                await asyncio.sleep(1)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"SSE stream hatası thread_id={thread_id}: {e}")
+                yield _format_sse("error", {"thread_id": thread_id, "detail": str(e)})
+                break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 @router.post("/{thread_id}/approve", status_code=202)
 async def approve_analysis(thread_id: str, approval: ApprovalRequest, background_tasks: BackgroundTasks):
     """
@@ -46,10 +105,8 @@ async def approve_analysis(thread_id: str, approval: ApprovalRequest, background
     status = agent_service.get_thread_status(thread_id)
     
     if not status.is_interrupted:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Thread ({thread_id}) şu anda insan onayı beklemiyor. Mevcut durum: {status.status}"
-        )
+        logger.warning(f"Thread ({thread_id}) zaten işleniyor veya tamamlandı. Mevcut durum: {status.status}")
+        return {"message": f"Thread ({thread_id}) zaten işleniyor. Mevcut durum: {status.status}"}
         
     background_tasks.add_task(agent_service.resume_analysis_task, thread_id, approval)
     
