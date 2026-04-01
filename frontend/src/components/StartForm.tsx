@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Play } from 'lucide-react';
-import { startAnalysis } from '../api';
+import { getRecentAnalyses, type RecentAnalysisItem, startAnalysis } from '../api';
 
 interface StartFormProps {
   onStarted: (threadId: string) => void;
@@ -11,6 +11,26 @@ const StartForm: React.FC<StartFormProps> = ({ onStarted }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [recentItems, setRecentItems] = useState<RecentAnalysisItem[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [recentError, setRecentError] = useState<string | null>(null);
+
+  const loadRecent = async () => {
+    setRecentLoading(true);
+    setRecentError(null);
+    try {
+      const response = await getRecentAnalyses(10);
+      setRecentItems(response.items || []);
+    } catch (err: any) {
+      setRecentError(err?.message || 'Son analizler alınamadı');
+    } finally {
+      setRecentLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadRecent();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,6 +46,7 @@ const StartForm: React.FC<StartFormProps> = ({ onStarted }) => {
       if (response && response.thread_id) {
         setInfo(response.message || null);
         onStarted(response.thread_id);
+        await loadRecent();
       } else {
         setError('Geçersiz yanıt: Thread ID bulunamadı.');
       }
@@ -82,6 +103,48 @@ const StartForm: React.FC<StartFormProps> = ({ onStarted }) => {
           )}
         </button>
       </form>
+
+      <div className="mt-6 pt-4 border-t border-gray-200">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-700">Son Analizler</h3>
+          <button
+            type="button"
+            onClick={loadRecent}
+            className="text-xs text-blue-600 hover:text-blue-800 underline"
+            disabled={recentLoading}
+          >
+            Yenile
+          </button>
+        </div>
+
+        {recentLoading && <p className="text-xs text-gray-500">Yükleniyor...</p>}
+        {recentError && <p className="text-xs text-red-600">{recentError}</p>}
+
+        {!recentLoading && !recentError && recentItems.length === 0 && (
+          <p className="text-xs text-gray-500">Henüz analiz kaydı yok.</p>
+        )}
+
+        {!recentLoading && !recentError && recentItems.length > 0 && (
+          <div className="space-y-2 max-h-56 overflow-auto pr-1">
+            {recentItems.map((item) => (
+              <button
+                key={item.thread_id}
+                type="button"
+                onClick={() => onStarted(item.thread_id)}
+                className="w-full text-left border border-gray-200 rounded-md p-2 hover:bg-gray-50 transition"
+              >
+                <div className="text-xs font-semibold text-gray-800 truncate">
+                  {item.company_name || 'Bilinmeyen Şirket'}
+                </div>
+                <div className="mt-1 text-[11px] text-gray-500 flex items-center justify-between">
+                  <span>{item.status.toUpperCase()}</span>
+                  <span className="truncate ml-2">{item.thread_id}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

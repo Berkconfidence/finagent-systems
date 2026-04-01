@@ -30,6 +30,20 @@ export interface AnalysisSseEvent<T = any> {
   data: T;
 }
 
+export interface RecentAnalysisItem {
+  thread_id: string;
+  company_name: string;
+  status: 'running' | 'interrupted' | 'completed' | 'failed' | 'canceled';
+  is_interrupted: boolean;
+  pending_node: string | null;
+  last_checkpoint_id: string;
+}
+
+export interface RecentAnalysesResponse {
+  count: number;
+  items: RecentAnalysisItem[];
+}
+
 export const startAnalysis = async (data: StartAnalysisRequest) => {
   const response = await api.post<StartAnalysisResponse>('/api/v1/analysis/start', data);
   return response.data;
@@ -47,8 +61,20 @@ export const getAgentStatus = async (threadId: string) => {
   return response.data;
 };
 
+export const getRecentAnalyses = async (limit = 10) => {
+  const response = await api.get<RecentAnalysesResponse>('/api/v1/analysis/recent', {
+    params: { limit },
+  });
+  return response.data;
+};
+
 export const submitHitlDecision = async (threadId: string, data: HitlRequest) => {
   const response = await api.post(`/api/v1/analysis/${threadId}/approve`, data);
+  return response.data;
+};
+
+export const cancelAnalysis = async (threadId: string) => {
+  const response = await api.post(`/api/v1/analysis/${threadId}/cancel`);
   return response.data;
 };
 

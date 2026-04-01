@@ -59,6 +59,23 @@ async def get_analysis_status(thread_id: str):
         raise HTTPException(status_code=500, detail="Durum sorgulanırken sunucu hatası oluştu.")
 
 
+@router.get("/recent")
+async def get_recent_analyses(limit: int = 10):
+    """
+    Son analiz thread'lerini (status özeti ile) döner.
+    UI tarafında hızlı devam listesi için kullanılır.
+    """
+    try:
+        items = agent_service.list_recent_threads(limit=limit)
+        return {
+            "count": len(items),
+            "items": items,
+        }
+    except Exception as e:
+        logger.error(f"Recent analyses okunurken hata: {e}")
+        raise HTTPException(status_code=500, detail="Son analizler okunurken sunucu hatası oluştu.")
+
+
 @router.get("/{thread_id}/events")
 async def stream_analysis_events(thread_id: str):
     """
@@ -87,7 +104,7 @@ async def stream_analysis_events(thread_id: str):
                         heartbeat_tick = 0
                         yield _format_sse("heartbeat", {"thread_id": thread_id})
 
-                if payload.get("status") in ["completed", "failed"]:
+                if payload.get("status") in ["completed", "failed", "canceled"]:
                     yield _format_sse("end", payload)
                     break
 
@@ -117,6 +134,9 @@ async def approve_analysis(thread_id: str, approval: ApprovalRequest, background
     """
     status = agent_service.get_thread_status(thread_id)
     
+    if status.status == "canceled":
+        return {"message": f"Thread ({thread_id}) kullanıcı tarafından iptal edilmiş durumda."}
+
     if not status.is_interrupted:
         logger.warning(f"Thread ({thread_id}) zaten işleniyor veya tamamlandı. Mevcut durum: {status.status}")
         return {"message": f"Thread ({thread_id}) zaten işleniyor. Mevcut durum: {status.status}"}
@@ -125,3 +145,16 @@ async def approve_analysis(thread_id: str, approval: ApprovalRequest, background
     
     action_text = "Onaylandı" if approval.is_approved else "Reddedildi"
     return {"message": f"Kredi analizi süreci '{action_text}' kararıyla arka planda devam ettiriliyor."}
+
+
+@router.post("/{thread_id}/cancel", status_code=202)
+async def cancel_analysis(thread_id: str):
+    """
+    Çalışan veya interrupt durumunda bekleyen analizi iptal eder.
+    """
+    try:
+        agent_service.cancel_analysis_task(thread_id)
+        return {"message": f"Thread ({thread_id}) iptal edildi."}
+    except Exception as e:
+        logger.error(f"Cancel sırasında hata thread_id={thread_id}: {e}")
+        raise HTTPException(status_code=500, detail="İptal işlemi sırasında sunucu hatası oluştu.")

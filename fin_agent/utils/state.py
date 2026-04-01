@@ -25,7 +25,7 @@ class AgentState(TypedDict):
     final_report: str
     
     # Kredi kararı için tipler
-    credit_decision: Literal["PENDING", "APPROVED", "REJECTED", "REVISION_REQUIRED"]
+    credit_decision: Literal["PENDING", "APPROVED", "REJECTED", "REVISION_REQUIRED", "CANCELED"]
     
     next_node: str
 

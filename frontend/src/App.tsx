@@ -24,12 +24,12 @@ function App() {
         <p className="text-gray-600">Enterprise Credit Risk Analysis System</p>
       </header>
       
-      <main className="w-full max-w-5xl px-4 flex flex-col md:flex-row gap-6 items-start">
-        <div className="w-full md:w-1/3">
+      <main className="w-full max-w-[1500px] px-4 flex flex-col lg:flex-row gap-6 items-start justify-center">
+        <div className="w-full lg:w-1/4 lg:max-w-md shrink-0">
           <StartForm onStarted={(threadId) => setActiveThreadId(threadId)} />
         </div>
         
-        <div className="w-full md:w-2/3 h-full">
+        <div className="w-full lg:w-3/4 h-full">
           {activeThreadId ? (
             <>
               <div className="mb-3 flex justify-end">
