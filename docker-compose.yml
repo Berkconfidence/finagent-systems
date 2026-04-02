@@ -33,6 +33,7 @@ services:
     environment:
       - QDRANT_URL=http://qdrant:6333
       - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
+      - GCS_UPLOAD_BUCKET=finagent-360-docs-berk
       - PROJECT_ID=fin-agent-360
       - DATABASE_URL=postgresql://admin:admin@db:5432/langgraph_persistence
     volumes:

@@ -4,6 +4,13 @@ import operator
 
 class AgentState(TypedDict):
     company_name: str
+
+    document_id: Optional[str]
+    document_object_key: Optional[str]
+    document_sha256: Optional[str]
+    document_original_name: Optional[str]
+    document_mime_type: Optional[str]
+    document_size_bytes: Optional[int]
     
     instructions: Annotated[List[BaseMessage], operator.add]
 

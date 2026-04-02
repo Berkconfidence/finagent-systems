@@ -221,6 +221,8 @@ const StatusDashboard: React.FC<StatusDashboardProps> = ({ threadId }) => {
         const status = event.data?.status;
         if (event.type === 'end' || status === 'completed' || status === 'failed' || status === 'canceled') {
           hasTerminalStatus = true;
+          eventSourceRef.current?.close();
+          clearFallbackTimer();
         }
         dispatch({ type: 'SSE_STATUS', payload: event.data });
       }

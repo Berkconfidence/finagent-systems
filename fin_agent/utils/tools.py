@@ -4,6 +4,7 @@ import os
 from langchain_core.tools import tool
 from dotenv import load_dotenv
 from tavily import TavilyClient
+from google.cloud import storage
 
 load_dotenv()
 tavily_api_key = os.getenv("TAVILY_SEARCH_API")
@@ -14,6 +15,18 @@ def get_pdf_base64(pdf_path: str) -> str:
     """PDF dosyasını okuyup tek bir base64 string'e çevirir."""
     with open(pdf_path, "rb") as f:
         pdf_data = f.read()
+    return base64.b64encode(pdf_data).decode("utf-8")
+
+
+def get_pdf_base64_from_gcs(object_key: str, bucket_name: str | None = None) -> str:
+    """GCS'teki PDF dosyasını okuyup tek bir base64 string'e çevirir."""
+    target_bucket = (bucket_name or os.getenv("GCS_UPLOAD_BUCKET", "")).strip()
+    if not target_bucket:
+        raise ValueError("GCS bucket adı bulunamadı. GCS_UPLOAD_BUCKET tanımlanmalı.")
+
+    storage_client = storage.Client()
+    blob = storage_client.bucket(target_bucket).blob(object_key)
+    pdf_data = blob.download_as_bytes()
     return base64.b64encode(pdf_data).decode("utf-8")
 
 @tool

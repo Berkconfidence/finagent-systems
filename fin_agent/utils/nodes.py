@@ -1,14 +1,67 @@
-import os
 import json
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage, ToolMessage
 from langchain_google_vertexai import ChatVertexAI
 from fin_agent.utils.state import AgentState
-from fin_agent.utils.tools import get_pdf_base64, search_market_data
+from fin_agent.utils.tools import get_pdf_base64_from_gcs, search_market_data
 from langgraph.store.base import BaseStore
 from langgraph.types import interrupt
 
 
 llm = ChatVertexAI(model="gemini-2.5-flash", temperature=0.2)
+
+
+def _decision_memory_key(document_sha256: str | None) -> str:
+    normalized_sha = (document_sha256 or "").strip().lower()
+    if normalized_sha:
+        return f"last_credit_decision:sha256:{normalized_sha}"
+    return "last_credit_decision"
+
+
+def _cleanup_legacy_company_decision(store: BaseStore, company_name: str):
+    try:
+        if hasattr(store, "delete"):
+            store.delete(namespace=("companies", company_name), key="last_credit_decision")
+    except Exception:
+        pass
+
+
+def _latest_audit_note(state: AgentState) -> str:
+    logs = state.get("audit_log", [])
+    if not logs:
+        return ""
+    return str(logs[-1] or "").strip().lower()
+
+
+def _needs_financial_recheck(audit_note: str) -> bool:
+    keywords = [
+        "cari oran",
+        "likidite",
+        "debt",
+        "borç",
+        "özsermaye",
+        "faiz karşılama",
+        "ebitda",
+        "favök",
+        "nakit",
+        "finansal",
+        "kpi",
+    ]
+    return any(k in audit_note for k in keywords)
+
+
+def _needs_market_recheck(audit_note: str) -> bool:
+    keywords = [
+        "market",
+        "piyasa",
+        "sentiment",
+        "haber",
+        "sektör",
+        "rekabet",
+        "competitor",
+        "risk",
+        "makro",
+    ]
+    return any(k in audit_note for k in keywords)
 
 def orchestrator(state: AgentState, store: BaseStore):
     """
@@ -18,9 +71,13 @@ def orchestrator(state: AgentState, store: BaseStore):
     
     company = state.get("company_name", "Bilinmeyen Şirket")
     safe_company_name = company.replace(".", "").strip()
+    document_sha256 = state.get("document_sha256")
     loop_step = state.get("loop_step", 0)
-    
-    past_memory = store.get(namespace=("companies", safe_company_name), key="last_credit_decision")
+
+    past_memory = store.get(
+        namespace=("companies", safe_company_name),
+        key=_decision_memory_key(document_sha256),
+    )
     
     if past_memory and loop_step == 0:
         decision = past_memory.value.get("decision")
@@ -92,19 +149,56 @@ def orchestrator(state: AgentState, store: BaseStore):
 def financialAgent(state: AgentState):
     """Finansal verileri analiz eden ve KPI'ları çıkaran ajan."""
 
-    root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    pdf_path = os.path.join(root_dir, "sample_statement.pdf")
-
-    pdf_base64 = get_pdf_base64(pdf_path)
-
     company_name = state.get("company_name", "Bilinmeyen Şirket")
     
     inst_list = state.get("instructions", [])
     orchestrator_instruction = inst_list[-1].content if inst_list else "Talimat yok."
+    loop_step = state.get("loop_step", 0)
+    has_existing_financial = bool(state.get("financial_kpis"))
+    latest_audit_note = _latest_audit_note(state)
     
     if "[SKIP_ANALYSIS]" in orchestrator_instruction:
         return {
             "messages": [AIMessage(content="Hafızada bulunduğu için finansal analiz atlandı.")]
+        }
+
+    if loop_step >= 1 and has_existing_financial and not _needs_financial_recheck(latest_audit_note):
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Revizyon turunda finansal yeniden hesaplama atlandı; "
+                        "mevcut finansal KPI'lar yeniden kullanılıyor."
+                    )
+                )
+            ]
+        }
+
+    if loop_step >= 1 and has_existing_financial and _needs_financial_recheck(latest_audit_note):
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Revizyon turunda PDF tekrar okunmadı; finansal tekrar değerlendirme "
+                        "mevcut KPI seti üzerinden yürütülüyor."
+                    )
+                )
+            ]
+        }
+
+    document_object_key = state.get("document_object_key")
+    if not document_object_key:
+        return {
+            "financial_kpis": [{"error": "Yüklü PDF bulunamadı. Lütfen PDF ile analiz başlatın."}],
+            "messages": [AIMessage(content="Finansal analiz başlatılamadı: PDF referansı bulunamadı.")],
+        }
+
+    try:
+        pdf_base64 = get_pdf_base64_from_gcs(document_object_key)
+    except Exception as e:
+        return {
+            "financial_kpis": [{"error": f"PDF okunamadı: {str(e)}"}],
+            "messages": [AIMessage(content="Finansal analiz başlatılamadı: PDF GCS üzerinden okunamadı.")],
         }
     
     system_prompt = f"""Sen kıdemli bir kurumsal kredi analistisin (Senior Credit Underwriter).
@@ -176,6 +270,9 @@ def marketAgent(state: AgentState):
     """Market verilerini analiz eden ajan"""
 
     company_name = state.get("company_name", "Bilinmeyen Şirket")
+    loop_step = state.get("loop_step", 0)
+    has_existing_market = bool(state.get("market_sentiment"))
+    latest_audit_note = _latest_audit_note(state)
     
     inst_list = state.get("instructions", [])
     orchestrator_instruction = inst_list[-1].content if inst_list else "Talimat yok."
@@ -183,6 +280,18 @@ def marketAgent(state: AgentState):
     if "[SKIP_ANALYSIS]" in orchestrator_instruction:
         return {
             "messages": [AIMessage(content="Hafızada bulunduğu için piyasa analizi atlandı.")]
+        }
+
+    if loop_step >= 1 and has_existing_market and not _needs_market_recheck(latest_audit_note):
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Revizyon turunda piyasa yeniden taraması atlandı; "
+                        "mevcut market analizi yeniden kullanılıyor."
+                    )
+                )
+            ]
         }
 
     system_prompt = f"""Sen kıdemli bir Piyasa Riski Analistisin (Senior Market Risk Analyst / Piyasanın Sesi).
@@ -269,6 +378,7 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
     
     company_name = state.get("company_name", "Bilinmeyen Şirket")
     safe_company_name = company_name.replace(".", "").strip()
+    document_sha256 = state.get("document_sha256")
     financial_data = state.get("financial_kpis", [])[-1] if state.get("financial_kpis") else {}
     market_data = state.get("market_sentiment", [])[-1] if state.get("market_sentiment") else {}
     loop_state = state.get("loop_step", 0)
@@ -278,7 +388,10 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
     orchestrator_instruction = inst_list[-1].content if inst_list else ""
     
     if "[SKIP_ANALYSIS]" in orchestrator_instruction:
-        past_memory = store.get(namespace=("companies", safe_company_name), key="last_credit_decision")
+        past_memory = store.get(
+            namespace=("companies", safe_company_name),
+            key=_decision_memory_key(document_sha256),
+        )
         decision = past_memory.value.get("decision") if past_memory else "UNKNOWN"
         reason = past_memory.value.get("reason") if past_memory else "UNKNOWN"
         return {
@@ -306,11 +419,13 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
     3. Faiz Karşılama Oranı (Interest Coverage Ratio) > 1.5 olmalıdır. Borç ödeme kapasitesi için kritiktir.
     4. Sektör Risk Puanı > 70 veya Haber Akışında Belirgin Bir 'NEGATIVE' sentiment varsa, şirketin faaliyet riski yüksektir; 'REVISION_REQUIRED' denilerek daha detaylı inceleme talep edilmelidir.
     5. Güçlü Operasyonel Nakit Akışı veya FAVÖK Marjı, makroekonomik riskleri bir nebze hafifletebilir ancak tamamen silmez.
+        6. REVISION_REQUIRED yalnızca ilk denemede (loop_step == 0) bir kez kullanılabilir.
+             İkinci denemede (loop_step >= 1) nihai karar zorunludur: APPROVED veya REJECTED.
     """
 
     system_prompt = f"""Sen kurumun Kıdemli Kredi Risk Denetçisisin (Senior Risk Auditor).
     MEVCUT DURUM:
-    Şu anda analiz döngüsünün {loop_state}. adımındasın. Maximum döngü limiti 1'dir. 
+    Şu anda analiz döngüsünün {loop_state}. adımındasın. Maximum revizyon limiti 1'dir.
     EĞER BU ADIM >= 1 İSE, 'REVISION_REQUIRED' seçeneğini KESİNLİKLE KULLANAMAZSIN. Ya 'APPROVED' ya da 'REJECTED' kararı vermek ZORUNDASIN.
 
     KURALLAR:
@@ -320,7 +435,7 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
     {history_str}
 
     KARAR STRATEJİSİ VE ÇIKTI FORMATI:
-    1. Verileri harmanla: Kar çok iyi ama piyasada çok büyük riskler varsa ve (loop_step < 3) ise "REVISION_REQUIRED" kararı ver ve analizde spesifik neyin eksik/çelişkili olduğunu "audit_note" içinde açıkla.
+    1. Verileri harmanla: Kar çok iyi ama piyasada çok büyük riskler varsa ve (loop_step == 0) ise "REVISION_REQUIRED" kararı ver ve analizde spesifik neyin eksik/çelişkili olduğunu "audit_note" içinde açıkla.
     2. Eğer metrikler politikaya açıkça ters düşüyor ve kabul edilemez riskler barındırıyorsa "REJECTED".
     3. Eğer şirket genel hatlarıyla sağlıklıysa ve riskler tolere edilebilirse "APPROVED".
     4. "next_node" değeri kararına bağlıdır. Karar "REVISION_REQUIRED" ise 'orchestrator' olmalıdır (çünkü ajanları yeniden paralel başlatacağız). Karar "APPROVED" veya "REJECTED" ise 'END' olmalıdır.
@@ -382,11 +497,24 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
         raw_analysis["summary_report"] = "Kredi talebi insan denetçi tarafından reddedilmiştir."
         raw_analysis["next_node"] = "END"
 
-    store.put(
-        namespace=("companies", safe_company_name),
-        key="last_credit_decision",
-        value={"decision": decision, "reason": raw_analysis.get("audit_note", "Belirtilmedi")}
-    )
+    decision_payload = {"decision": decision, "reason": raw_analysis.get("audit_note", "Belirtilmedi")}
+    has_document_hash = bool((document_sha256 or "").strip())
+
+    if has_document_hash:
+        _cleanup_legacy_company_decision(store, safe_company_name)
+        store.put(
+            namespace=("companies", safe_company_name),
+            key=_decision_memory_key(document_sha256),
+            value=decision_payload,
+        )
+    else:
+        store.put(
+            namespace=("companies", safe_company_name),
+            key="last_credit_decision",
+            value=decision_payload
+        )
+
+    next_loop_increment = 1 if decision == "REVISION_REQUIRED" else 0
 
     return {
         "credit_decision": decision,
@@ -394,7 +522,7 @@ def riskAuditorAgent(state: AgentState, store: BaseStore):
         "final_report": raw_analysis.get("summary_report", ""),
         "instructions": [AIMessage(content=f"DENETÇİ NOTU: {raw_analysis.get('audit_note')}")],
         "next_node": raw_analysis.get("next_node", "END"),
-        "loop_step": 1,
+        "loop_step": next_loop_increment,
         "messages": [AIMessage(content=f"Auditor kararı: {decision}")],
         "human_approval": human_decision
     }

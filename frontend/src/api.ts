@@ -13,6 +13,11 @@ export interface StartAnalysisRequest {
   company_name: string;
 }
 
+export interface StartAnalysisWithPdfRequest {
+  company_name: string;
+  file: File;
+}
+
 export interface StartAnalysisResponse {
   thread_id: string;
   message: string;
@@ -46,6 +51,20 @@ export interface RecentAnalysesResponse {
 
 export const startAnalysis = async (data: StartAnalysisRequest) => {
   const response = await api.post<StartAnalysisResponse>('/api/v1/analysis/start', data);
+  return response.data;
+};
+
+export const startAnalysisWithPdf = async (data: StartAnalysisWithPdfRequest) => {
+  const formData = new FormData();
+  formData.append('company_name', data.company_name);
+  formData.append('file', data.file);
+
+  const response = await api.post<StartAnalysisResponse>('/api/v1/analysis/start-with-pdf', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+
   return response.data;
 };
 

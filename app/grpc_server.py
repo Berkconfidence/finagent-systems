@@ -4,7 +4,19 @@ from loguru import logger
 import grpc
 from fin_proto import credit_score_pb2
 from fin_proto import credit_score_pb2_grpc
-from app.services.agent_service import start_analysis_task, get_thread_status
+from app.schemas.analysis import AnalysisRequest
+from app.services.agent_service import (
+    find_active_thread_for_company,
+    get_thread_status,
+    start_analysis_task,
+)
+
+
+def _to_json_str(data):
+    try:
+        return json.dumps(data, ensure_ascii=False) if data else "[]"
+    except Exception:
+        return "[]"
 
 
 class CreditRiskGRPCServer(credit_score_pb2_grpc.CreditRiskServiceServicer):
@@ -17,7 +29,7 @@ class CreditRiskGRPCServer(credit_score_pb2_grpc.CreditRiskServiceServicer):
         """
         Dış dünyadan yeni analiz isteği geldiğinde tetiklenir.
         """
-        company_name = request.company_name
+        company_name = (request.company_name or "").strip()
         logger.info(f"[gRPC] Yeni analiz talebi alındı: {company_name}")
 
         if not company_name:
@@ -26,14 +38,25 @@ class CreditRiskGRPCServer(credit_score_pb2_grpc.CreditRiskServiceServicer):
              return credit_score_pb2.AnalysisResponse()
 
         try:
-            thread_id = str(uuid.uuid4())
+            existing_thread = find_active_thread_for_company(company_name)
+            if existing_thread:
+                state_obj = getattr(existing_thread, "state", None)
+                return credit_score_pb2.AnalysisResponse(
+                    thread_id=existing_thread.thread_id,
+                    company_name=getattr(state_obj, "company_name", company_name) if state_obj else company_name,
+                    credit_decision=getattr(state_obj, "credit_decision", "PENDING") if state_obj else "PENDING",
+                    final_report=getattr(state_obj, "final_report", "") if state_obj else "",
+                    financial_kpis_json=_to_json_str(getattr(state_obj, "financial_kpis", [])) if state_obj else "[]",
+                    market_sentiment_json=_to_json_str(getattr(state_obj, "market_sentiment", [])) if state_obj else "[]",
+                    audit_log_json=_to_json_str(getattr(state_obj, "audit_log", [])) if state_obj else "[]",
+                    waiting_for_human=bool(getattr(existing_thread, "is_interrupted", False)),
+                )
 
-            class DummyRequest:
-                def __init__(self, name):
-                    self.company_name = name
-            
+            thread_id = str(uuid.uuid4())
+            analysis_request = AnalysisRequest(company_name=company_name)
+
             import threading
-            threading.Thread(target=start_analysis_task, args=(thread_id, DummyRequest(company_name))).start()
+            threading.Thread(target=start_analysis_task, args=(thread_id, analysis_request), daemon=True).start()
 
             return credit_score_pb2.AnalysisResponse(
                 thread_id=thread_id,
@@ -74,19 +97,13 @@ class CreditRiskGRPCServer(credit_score_pb2_grpc.CreditRiskServiceServicer):
 
             status = getattr(state_data, "status", "PENDING")
             state_obj = getattr(state_data, "state", None)
-            
-            def to_json_str(data):
-                try:
-                    return json.dumps(data, ensure_ascii=False) if data else "[]"
-                except:
-                    return "[]"
 
             company_val = getattr(state_obj, "company_name", "") if state_obj else ""
             decision_val = getattr(state_obj, "credit_decision", "PENDING") if state_obj else "PENDING"
             report_val = getattr(state_obj, "final_report", "") if state_obj else ""
-            kpi_val = to_json_str(getattr(state_obj, "financial_kpis", [])) if state_obj else "[]"
-            market_val = to_json_str(getattr(state_obj, "market_sentiment", [])) if state_obj else "[]"
-            audit_val = to_json_str(getattr(state_obj, "audit_log", [])) if state_obj else "[]"
+            kpi_val = _to_json_str(getattr(state_obj, "financial_kpis", [])) if state_obj else "[]"
+            market_val = _to_json_str(getattr(state_obj, "market_sentiment", [])) if state_obj else "[]"
+            audit_val = _to_json_str(getattr(state_obj, "audit_log", [])) if state_obj else "[]"
             waiting_val = getattr(state_data, "is_interrupted", False)
 
             return credit_score_pb2.AnalysisResponse(

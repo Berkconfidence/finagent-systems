@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 import logging
 
 from fin_agent.agent import app as agent_app
@@ -8,13 +8,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/{company_name}")
-async def get_company_history(company_name: str):
+async def get_company_history(
+    company_name: str,
+    document_sha256: str | None = Query(default=None, description="Opsiyonel: SHA-256 ile spesifik PDF geçmişi getirir."),
+):
     """
     Belirtilen şirket için LangGraph'ın Long-Term Memory (PostgresStore) içinde 
     neler hatırladığını (geçmiş kredi kararları, analiz gerekçeleri vb.) API üzerinden döner.
     """
     try:
         safe_company_name = company_name.replace(".", "").strip()
+        normalized_sha = (document_sha256 or "").strip().lower()
+        memory_key = (
+            f"last_credit_decision:sha256:{normalized_sha}"
+            if normalized_sha
+            else "last_credit_decision"
+        )
         
         if not hasattr(agent_app, "store") or agent_app.store is None:
              raise HTTPException(
@@ -24,7 +33,7 @@ async def get_company_history(company_name: str):
              
         past_memory = agent_app.store.get(
             namespace=("companies", safe_company_name), 
-            key="last_credit_decision"
+            key=memory_key
         )
         
         if not past_memory:
@@ -37,6 +46,7 @@ async def get_company_history(company_name: str):
         return {
             "company_name": company_name,
             "has_history": True,
+            "memory_key": memory_key,
             "last_decision": past_memory.value.get("decision"),
             "reasoning": past_memory.value.get("reason"),
             "memory_timestamp": past_memory.updated_at.isoformat() if hasattr(past_memory, "updated_at") and past_memory.updated_at else None

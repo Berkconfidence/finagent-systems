@@ -4,6 +4,12 @@ from typing import List, Dict, Any, Literal, Optional
 class AgentStateSchema(BaseModel):
     """LangGraph içindeki AgentState TypedDict yapısının Pydantic karşılığı."""
     company_name: str
+    document_id: Optional[str] = None
+    document_object_key: Optional[str] = None
+    document_sha256: Optional[str] = None
+    document_original_name: Optional[str] = None
+    document_mime_type: Optional[str] = None
+    document_size_bytes: Optional[int] = None
     financial_kpis: List[Dict[str, Any]] = []
     market_sentiment: List[Dict[str, Any]] = []
     audit_log: List[str] = []

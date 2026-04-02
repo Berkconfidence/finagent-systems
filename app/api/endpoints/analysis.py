@@ -1,6 +1,6 @@
 import asyncio
 import json
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 import uuid
 import logging
@@ -8,6 +8,7 @@ import logging
 from app.schemas.analysis import AnalysisRequest, AnalysisResponse, ApprovalRequest
 from app.schemas.status import ThreadStatusResponse
 from app.services import agent_service
+from app.services import document_service
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,91 @@ async def start_analysis(request: AnalysisRequest, background_tasks: BackgroundT
     return AnalysisResponse(
         thread_id=thread_id,
         message=f"'{request.company_name}' için kredi analizi arka planda başlatıldı."
+    )
+
+
+@router.post("/start-with-pdf", response_model=AnalysisResponse, status_code=202)
+async def start_analysis_with_pdf(
+    background_tasks: BackgroundTasks,
+    company_name: str = Form(...),
+    file: UploadFile = File(...),
+):
+    """
+    PDF yükleyerek yeni kredi risk analizi süreci başlatır.
+    """
+    normalized_company = (company_name or "").strip()
+    if not normalized_company:
+        raise HTTPException(status_code=400, detail="Şirket adı zorunludur.")
+
+    try:
+        file_bytes = await file.read()
+        sha256 = document_service.validate_pdf_bytes(
+            file_name=file.filename or "uploaded.pdf",
+            content_type=file.content_type or "application/pdf",
+            file_bytes=file_bytes,
+        )
+
+        existing_thread = agent_service.find_active_thread_for_company_and_sha256(
+            company_name=normalized_company,
+            document_sha256=sha256,
+        )
+        if existing_thread:
+            logger.info(
+                "Mevcut aktif thread tekrar kullanılıyor "
+                f"company={normalized_company}, sha={sha256}, thread_id={existing_thread.thread_id}"
+            )
+            return AnalysisResponse(
+                thread_id=existing_thread.thread_id,
+                message=(
+                    f"'{normalized_company}' için aynı PDF ile devam eden bir analiz bulundu. "
+                    "Mevcut thread üzerinden devam ediliyor."
+                ),
+            )
+
+        uploaded = document_service.upload_pdf_to_gcs(
+            file_name=file.filename or "uploaded.pdf",
+            content_type=file.content_type or "application/pdf",
+            file_bytes=file_bytes,
+            sha256=sha256,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"PDF upload sırasında hata company={normalized_company}: {e}")
+        raise HTTPException(status_code=500, detail="PDF yüklenirken sunucu hatası oluştu.")
+    finally:
+        await file.close()
+
+    thread_id = str(uuid.uuid4())
+    request = AnalysisRequest(
+        company_name=normalized_company,
+        document_id=uploaded.document_id,
+        document_object_key=uploaded.object_key,
+        document_sha256=uploaded.sha256,
+        document_original_name=uploaded.original_name,
+        document_mime_type=uploaded.content_type,
+        document_size_bytes=uploaded.size_bytes,
+    )
+
+    try:
+        background_tasks.add_task(agent_service.start_analysis_task, thread_id, request)
+    except Exception as e:
+        logger.error(
+            "Background task eklenemedi, orphan cleanup tetiklendi "
+            f"thread_id={thread_id}, object_key={uploaded.object_key}: {e}"
+        )
+        try:
+            document_service.delete_pdf_from_gcs(uploaded.object_key)
+        except Exception as cleanup_error:
+            logger.warning(
+                "Orphan cleanup başarısız "
+                f"thread_id={thread_id}, object_key={uploaded.object_key}: {cleanup_error}"
+            )
+        raise HTTPException(status_code=500, detail="Analiz kuyruğa alınamadı.")
+
+    return AnalysisResponse(
+        thread_id=thread_id,
+        message=f"'{normalized_company}' için PDF tabanlı kredi analizi arka planda başlatıldı.",
     )
 
 @router.get("/{thread_id}/status", response_model=ThreadStatusResponse)

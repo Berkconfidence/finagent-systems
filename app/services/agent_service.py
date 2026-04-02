@@ -11,6 +11,37 @@ _canceled_threads: set[str] = set()
 _cancel_lock = threading.Lock()
 _thread_activity_logs: dict[str, list[str]] = {}
 _activity_lock = threading.Lock()
+_activity_table_ready = False
+_activity_table_lock = threading.Lock()
+
+
+def _ensure_activity_table():
+    global _activity_table_ready
+
+    if _activity_table_ready:
+        return
+
+    with _activity_table_lock:
+        if _activity_table_ready:
+            return
+
+        ddl = """
+        CREATE TABLE IF NOT EXISTS analysis_activity_logs (
+            id BIGSERIAL PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            line TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_analysis_activity_logs_thread_id_id
+        ON analysis_activity_logs (thread_id, id DESC);
+        """
+
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(ddl)
+
+        _activity_table_ready = True
 
 
 def _is_canceled(thread_id: str) -> bool:
@@ -26,6 +57,18 @@ def _mark_canceled(thread_id: str):
 def _push_activity(thread_id: str, message: str):
     timestamp = datetime.now().strftime("%H:%M:%S")
     line = f"[{timestamp}] {message}"
+
+    try:
+        _ensure_activity_table()
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO analysis_activity_logs (thread_id, line) VALUES (%s, %s)",
+                    (thread_id, line),
+                )
+    except Exception as e:
+        logger.warning(f"[{thread_id}] Activity DB yazımı atlandı: {e}")
+
     with _activity_lock:
         items = _thread_activity_logs.setdefault(thread_id, [])
         items.append(line)
@@ -35,7 +78,33 @@ def _push_activity(thread_id: str, message: str):
 
 def _get_activity(thread_id: str) -> list[str]:
     with _activity_lock:
-        return list(_thread_activity_logs.get(thread_id, []))
+        cached = _thread_activity_logs.get(thread_id)
+        if cached:
+            return list(cached)
+
+    try:
+        _ensure_activity_table()
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT line
+                    FROM analysis_activity_logs
+                    WHERE thread_id = %s
+                    ORDER BY id DESC
+                    LIMIT 200
+                    """,
+                    (thread_id,),
+                )
+                rows = cur.fetchall()
+
+        restored = [line for (line,) in reversed(rows)]
+        with _activity_lock:
+            _thread_activity_logs[thread_id] = restored
+        return restored
+    except Exception as e:
+        logger.warning(f"[{thread_id}] Activity DB okunamadı: {e}")
+        return []
 
 
 def cancel_analysis_task(thread_id: str):
@@ -109,6 +178,64 @@ def find_active_thread_for_company(company_name: str, limit: int = 200) -> Threa
     return None
 
 
+def find_active_thread_for_company_and_sha256(
+    company_name: str,
+    document_sha256: str,
+    limit: int = 300,
+) -> ThreadStatusResponse | None:
+    """
+    Şirket + PDF hash eşleşmesiyle aktif thread arar.
+    Aynı şirket için farklı PDF geldiyse yeni thread açılmasına izin verir.
+    """
+    target_company = _normalize_company_name(company_name)
+    target_sha = (document_sha256 or "").strip().lower()
+    if not target_company or not target_sha:
+        return None
+
+    try:
+        query = """
+        WITH latest AS (
+            SELECT DISTINCT ON (thread_id)
+                thread_id,
+                checkpoint_id,
+                checkpoint
+            FROM checkpoints
+            ORDER BY thread_id, checkpoint_id DESC
+        )
+        SELECT
+            thread_id,
+            checkpoint_id,
+            COALESCE(checkpoint->'channel_values'->>'company_name', '') AS company_name,
+            LOWER(COALESCE(checkpoint->'channel_values'->>'document_sha256', '')) AS document_sha256
+        FROM latest
+        ORDER BY checkpoint_id DESC
+        LIMIT %s
+        """
+
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (limit,))
+                rows = cur.fetchall()
+
+        for thread_id, _checkpoint_id, row_company_name, row_sha in rows:
+            if _normalize_company_name(row_company_name) != target_company:
+                continue
+            if (row_sha or "") != target_sha:
+                continue
+
+            thread_status = get_thread_status(thread_id)
+            if thread_status.status in ["running", "interrupted"]:
+                return thread_status
+
+    except Exception as e:
+        logger.error(
+            "Aktif thread (company+sha) aranırken hata "
+            f"company={company_name}, sha={document_sha256}: {e}"
+        )
+
+    return None
+
+
 def list_recent_threads(limit: int = 10):
     """
     Son checkpoint'lerden thread bazlı özet liste döner.
@@ -168,6 +295,12 @@ def start_analysis_task(thread_id: str, request_data: AnalysisRequest):
     
     initial_state = {
         "company_name": request_data.company_name,
+        "document_id": request_data.document_id,
+        "document_object_key": request_data.document_object_key,
+        "document_sha256": request_data.document_sha256,
+        "document_original_name": request_data.document_original_name,
+        "document_mime_type": request_data.document_mime_type,
+        "document_size_bytes": request_data.document_size_bytes,
         "instructions": [],
         "messages": [],
         "financial_kpis": [],
@@ -273,6 +406,12 @@ def get_thread_status(thread_id: str) -> ThreadStatusResponse:
 
     safe_state = AgentStateSchema(
         company_name=state_values.get("company_name", ""),
+        document_id=state_values.get("document_id"),
+        document_object_key=state_values.get("document_object_key"),
+        document_sha256=state_values.get("document_sha256"),
+        document_original_name=state_values.get("document_original_name"),
+        document_mime_type=state_values.get("document_mime_type"),
+        document_size_bytes=state_values.get("document_size_bytes"),
         financial_kpis=state_values.get("financial_kpis", []),
         market_sentiment=state_values.get("market_sentiment", []),
         audit_log=state_values.get("audit_log", []),
